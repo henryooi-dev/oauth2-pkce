@@ -7,7 +7,7 @@ import fs from "fs";
 
 const app = express();
 app.use(bodyParser.urlencoded({ extended: false }));
-app.use(bodyParser.json());
+// app.use(bodyParser.json());
 app.use(cookieParser());
 
 const clients = new Map();
@@ -27,6 +27,15 @@ const PUBLIC_KEY_PEM = fs.readFileSync("public.pem", "utf8");
 // Issuer and key ID
 const ISSUER = "http://localhost:3000";
 const KEY_ID = "demo-key-1";
+
+// Key variables
+let PRIVATE_KEY, PUBLIC_KEY;
+
+// Initialize keys
+async function initKeys() {
+  PRIVATE_KEY = await importPKCS8(PRIVATE_KEY_PEM, "RS256");
+  PUBLIC_KEY = await importSPKI(PUBLIC_KEY_PEM, "RS256");
+}
 
 function base64Url(input) {
   return input
@@ -117,6 +126,10 @@ app.post("/token", async (req, res) => {
 
     // Validate authorization code
     const record = authorizationCodes.get(code);
+    // Remove the code to prevent reuse
+    authorizationCodes.delete(code);
+
+    // Check if code exists and is valid
     if (!record) {
       return res.status(400).json({
         error: "invalid_grant",
@@ -124,7 +137,6 @@ app.post("/token", async (req, res) => {
       });
     }
     if (record.expires_at < Date.now()) {
-      authorizationCodes.delete(code);
       return res.status(400).json({
         error: "invalid_grant",
         error_description: "Authorization code expired",
@@ -149,12 +161,6 @@ app.post("/token", async (req, res) => {
       });
     }
 
-    // All validations passed, issue tokens
-    authorizationCodes.delete(code);
-
-    // Create JWT access token
-    const privateKey = await importPKCS8(PRIVATE_KEY_PEM, "RS256");
-
     // Create access token
     const accessToken = await new SignJWT({
       scope: record.scope,
@@ -167,7 +173,7 @@ app.post("/token", async (req, res) => {
       .setSubject(record.user.sub)
       .setExpirationTime("15m")
       .setIssuedAt()
-      .sign(privateKey);
+      .sign(PRIVATE_KEY);
 
     // Create refresh token
     const refreshToken = generateCode();
@@ -175,6 +181,7 @@ app.post("/token", async (req, res) => {
       client_id: client_id,
       sub: record.user.sub,
       scope: record.scope,
+      expires_at: Date.now() + 30 * 24 * 60 * 60 * 1000, // 30 days
     });
 
     // Return tokens
@@ -194,15 +201,25 @@ app.post("/token", async (req, res) => {
 
     // Validate refresh token
     const record = refreshTokens.get(refresh_token);
+
+    // Remove old refresh token to prevent reuse
+    refreshTokens.delete(refresh_token);
+    // Issue a new refresh token
+    const newRefreshToken = generateCode();
+    refreshTokens.set(newRefreshToken, {
+      client_id: client_id,
+      sub: record.user.sub,
+      scope: record.scope,
+      expires_at: Date.now() + 30 * 24 * 60 * 60 * 1000, // 30 days
+    });
+
+    // Check if refresh token exists and is valid
     if (!record || record.client_id !== client_id) {
       return res.status(400).json({
         error: "invalid_grant",
         error_description: "Invalid refresh token",
       });
     }
-
-    // Issue new access token
-    const privateKey = await importPKCS8(PRIVATE_KEY_PEM, "RS256");
 
     // Create access token
     const accessToken = await new SignJWT({
@@ -215,7 +232,7 @@ app.post("/token", async (req, res) => {
       .setSubject(record.sub)
       .setExpirationTime("1h")
       .setIssuedAt()
-      .sign(privateKey);
+      .sign(PRIVATE_KEY);
 
     // Return new access token
     return res.json({
@@ -235,10 +252,8 @@ app.post("/token", async (req, res) => {
 // JWKS endpoint
 // Serve the public keys in JWKS format
 app.get("/.well-known/jwks.json", async (req, res) => {
-  // Import the public key
-  const publicKey = await importSPKI(PUBLIC_KEY_PEM, "RS256");
   // Export the public key as JWK
-  const jwk = await exportJWK(publicKey);
+  const jwk = await exportJWK(PUBLIC_KEY);
   jwk.use = "sig";
   jwk.alg = "RS256";
   jwk.kid = KEY_ID;
@@ -247,6 +262,12 @@ app.get("/.well-known/jwks.json", async (req, res) => {
 });
 
 // Start the server
-app.listen(3000, () => {
-  console.log("Authorization server running on http://localhost:3000");
-});
+async function startServer() {
+  await initKeys();
+
+  app.listen(3000, () => {
+    console.log("Authorization server running on http://localhost:3000");
+  });
+}
+
+startServer();
