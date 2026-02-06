@@ -80,6 +80,13 @@ node index.js
 ```
 3. Visit client-app in your browser and follow the OAuth flow.
 
+### Running the Tests
+```
+# In terminal of project root(e.g: C:\{PROJECT_DIRECTORY_PATH}\oauth2-pkce\oauth-2.0\oauth-node-demo\)
+
+npm test
+```
+
 ### Security Notes
 - Never commit private keys (private.pem, private_pkcs8.pem) to GitHub.
 - Store secrets (client secrets, environment variables) in .env files and add them to .gitignore.
